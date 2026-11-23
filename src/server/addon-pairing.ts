@@ -1,6 +1,6 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { timingSafeEqual } from "node:crypto";
 import path from "node:path";
+import { dataDirectory, openDocumentStore, readFsDocument, writeFsDocument } from "./document-store";
 
 export const PAIRING_EXPIRED_MESSAGE = "Pairing expired, paste the new token";
 const PAIRING_REJECTED_MESSAGE = "Pairing token was missing or wrong.";
@@ -39,13 +39,44 @@ const memory = {
 };
 
 let loading: Promise<void> | null = null;
+let pairingWrite: Promise<void> | null = null;
+let checksWrite: Promise<void> | null = null;
 
-function tokenFile(): string {
-  return process.env.PRIZE_SCOUT_PAIRING_FILE ?? path.join(process.cwd(), "data", "addon-pairing.json");
+const PAIRING_KEY = "addon-pairing";
+const CHECKS_KEY = "addon-checks";
+
+function storeIsD1(): boolean {
+  return process.env.PRIZE_SCOUT_STORE === "d1";
+}
+
+function pairingFileOverride(): string | undefined {
+  return process.env.PRIZE_SCOUT_PAIRING_FILE;
+}
+
+function checksFileOverride(): string | undefined {
+  return process.env.PRIZE_SCOUT_ADDON_CHECKS_FILE;
+}
+
+function pairingUsesD1(): boolean {
+  return storeIsD1() && !pairingFileOverride();
+}
+
+function checksUseD1(): boolean {
+  return storeIsD1() && !checksFileOverride();
+}
+
+function pairingDirectory(): string {
+  const file = pairingFileOverride();
+  return file ? path.dirname(file) : dataDirectory();
+}
+
+function checksDirectory(): string {
+  const file = checksFileOverride();
+  return file ? path.dirname(file) : dataDirectory();
 }
 
 function pairingDisk(): boolean {
-  if (process.env.PRIZE_SCOUT_PAIRING_FILE) return true;
+  if (pairingFileOverride() || pairingUsesD1()) return true;
   return process.env.VITEST !== "true";
 }
 
@@ -56,11 +87,10 @@ function sameSecret(left: string, right: string): boolean {
   return timingSafeEqual(a, b);
 }
 
-function readPairingFile(): { token: string; previous: string | null } | null {
-  const file = tokenFile();
-  if (!existsSync(file)) return null;
+function parsePairing(raw: string | null): { token: string; previous: string | null } | null {
+  if (!raw) return null;
   try {
-    const parsed = JSON.parse(readFileSync(file, "utf8")) as { token?: unknown; previous?: unknown };
+    const parsed = JSON.parse(raw) as { token?: unknown; previous?: unknown };
     if (typeof parsed.token !== "string" || parsed.token.length === 0) return null;
     return { token: parsed.token, previous: typeof parsed.previous === "string" ? parsed.previous : null };
   } catch {
@@ -68,30 +98,30 @@ function readPairingFile(): { token: string; previous: string | null } | null {
   }
 }
 
-function writePairingFile(token: string, previous: string | null): void {
-  const file = tokenFile();
-  const dir = path.dirname(file);
-  mkdirSync(dir, { recursive: true });
-  const tmp = path.join(dir, `.addon-pairing.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
-  writeFileSync(tmp, `${JSON.stringify({ token, previous })}\n`, { mode: 0o600 });
-  try {
-    renameSync(tmp, file);
-  } catch (error) {
-    try {
-      unlinkSync(tmp);
-    } catch {
-      /* The temp file is removed when the rename can be undone. */
-    }
-    throw error;
-  }
+function pairingBody(token: string, previous: string | null): string {
+  return `${JSON.stringify({ token, previous })}\n`;
 }
 
-function checksFile(): string {
-  return process.env.PRIZE_SCOUT_ADDON_CHECKS_FILE ?? path.join(process.cwd(), "data", "addon-checks.json");
+function readPairingSync(): { token: string; previous: string | null } | null {
+  return parsePairing(readFsDocument(pairingDirectory(), PAIRING_KEY));
+}
+
+async function readPairingDocument(): Promise<{ token: string; previous: string | null } | null> {
+  if (pairingUsesD1()) return parsePairing(await (await openDocumentStore()).read(PAIRING_KEY));
+  return readPairingSync();
+}
+
+function writePairingFile(token: string, previous: string | null): void {
+  const body = pairingBody(token, previous);
+  if (pairingUsesD1()) {
+    pairingWrite = openDocumentStore().then((store) => store.write(PAIRING_KEY, body));
+    return;
+  }
+  writeFsDocument(pairingDirectory(), PAIRING_KEY, body, { mode: 0o600 });
 }
 
 function diskEnabled(): boolean {
-  if (process.env.PRIZE_SCOUT_ADDON_CHECKS_FILE) return true;
+  if (checksFileOverride() || checksUseD1()) return true;
   return process.env.VITEST !== "true";
 }
 
@@ -101,12 +131,11 @@ function isStoredCheck(value: unknown): value is AddonCheckRecord {
   return typeof row.url === "string" && row.url.startsWith("https://");
 }
 
-/** Missing and unreadable files are an empty list. The page is not fetched. */
-function readStoredChecks(): AddonCheckRecord[] {
-  const file = checksFile();
-  if (!existsSync(file)) return [];
+/** Missing and unreadable documents are an empty list. The page is not fetched. */
+function parseStoredChecks(raw: string | null): AddonCheckRecord[] {
+  if (!raw) return [];
   try {
-    const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
+    const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(isStoredCheck);
   } catch {
@@ -114,16 +143,37 @@ function readStoredChecks(): AddonCheckRecord[] {
   }
 }
 
+function checksBody(): string {
+  return JSON.stringify([...memory.checks.values()]);
+}
+
+function writeChecksDocument(): void {
+  const body = checksBody();
+  if (checksUseD1()) {
+    checksWrite = openDocumentStore().then((store) => store.write(CHECKS_KEY, body));
+    return;
+  }
+  writeFsDocument(checksDirectory(), CHECKS_KEY, body);
+}
+
+async function readChecksDocument(): Promise<AddonCheckRecord[]> {
+  if (!diskEnabled()) return [];
+  const { reclassifyStoredChecks } = await import("./addon-check");
+  const raw = checksUseD1() ? await (await openDocumentStore()).read(CHECKS_KEY) : readFsDocument(checksDirectory(), CHECKS_KEY);
+  return reclassifyStoredChecks(parseStoredChecks(raw));
+}
+
 async function ensureLoaded(): Promise<void> {
   if (memory.loaded) return;
+  if (checksUseD1()) {
+    for (const record of await readChecksDocument()) memory.checks.set(record.url, record);
+    memory.loaded = true;
+    return;
+  }
   if (!loading) {
     loading = (async () => {
       try {
-        if (!diskEnabled()) return;
-        const { reclassifyStoredChecks } = await import("./addon-check");
-        for (const record of reclassifyStoredChecks(readStoredChecks())) {
-          memory.checks.set(record.url, record);
-        }
+        for (const record of await readChecksDocument()) memory.checks.set(record.url, record);
       } finally {
         memory.loaded = true;
         loading = null;
@@ -140,17 +190,34 @@ export function resetAddonChecksForTests(): void {
   memory.checks.clear();
   memory.loaded = false;
   loading = null;
+  pairingWrite = null;
+  checksWrite = null;
+}
+
+function randomToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** Loads the pairing document before a request uses it. File reads stay synchronous for the practice app. */
+export async function preparePairing(): Promise<void> {
+  if (memory.token || !pairingDisk()) return;
+  const stored = await readPairingDocument();
+  if (!stored) return;
+  memory.token = stored.token;
+  memory.previous = stored.previous;
 }
 
 export function getPairingToken(): string {
   if (memory.token) return memory.token;
-  const stored = pairingDisk() ? readPairingFile() : null;
+  const stored = pairingUsesD1() || !pairingDisk() ? null : readPairingSync();
   if (stored) {
     memory.token = stored.token;
     memory.previous = stored.previous;
     return stored.token;
   }
-  memory.token = randomBytes(32).toString("hex");
+  memory.token = randomToken();
   memory.previous = null;
   if (pairingDisk()) writePairingFile(memory.token, null);
   return memory.token;
@@ -158,19 +225,29 @@ export function getPairingToken(): string {
 
 /** Replaces the pairing token. The previous token no longer authorizes a check. */
 export function rotatePairingToken(): string {
-  if (!memory.token && pairingDisk()) {
-    const stored = readPairingFile();
+  if (!memory.token && pairingDisk() && !pairingUsesD1()) {
+    const stored = readPairingSync();
     if (stored) {
       memory.token = stored.token;
       memory.previous = stored.previous;
     }
   }
-  const next = randomBytes(32).toString("hex");
+  const next = randomToken();
   const previous = memory.token;
   if (pairingDisk()) writePairingFile(next, previous);
   memory.previous = previous;
   memory.token = next;
   return next;
+}
+
+/** Waits until the pairing and checks documents have been written. */
+export async function addonPersistence(): Promise<void> {
+  const pairing = pairingWrite;
+  const checks = checksWrite;
+  pairingWrite = null;
+  checksWrite = null;
+  if (pairing) await pairing;
+  if (checks) await checks;
 }
 
 export function setPairingTokenForTests(token: string): void {
@@ -184,9 +261,7 @@ export function setPairingTokenForTests(token: string): void {
 export function saveAddonCheck(record: AddonCheckRecord): void {
   memory.checks.set(record.url, record);
   if (!diskEnabled()) return;
-  const file = checksFile();
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify([...memory.checks.values()]));
+  writeChecksDocument();
 }
 
 export async function allAddonChecks(): Promise<AddonCheckRecord[]> {
@@ -203,7 +278,7 @@ function rulesListRank(row: AddonCheckRecord): number {
   return /official rules not found/i.test(row.rulesNote) ? 0 : 1;
 }
 
-if (process.env.VITEST !== "true") {
+if (process.env.VITEST !== "true" && process.env.PRIZE_SCOUT_STORE !== "d1") {
   void ensureLoaded();
 }
 

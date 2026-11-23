@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { attachedRulesDocument, classifyRenderedPage, storeRenderedCheck } from "@/server/addon-check";
-import { allAddonChecks, appOriginAllowed } from "@/server/addon-pairing";
+import { addonPersistence, allAddonChecks, appOriginAllowed } from "@/server/addon-pairing";
 
 export const dynamic = "force-dynamic";
 
@@ -26,5 +26,6 @@ export async function POST(request: Request) {
   const combined = attachedRulesDocument(prior?.html || "", rulesHtml, "pasted");
   const result = classifyRenderedPage(combined, url, new Date(), prior?.limits ?? []);
   storeRenderedCheck(result, new Date().toISOString(), combined);
+  await addonPersistence();
   return NextResponse.json({ ok: true, ...result });
 }

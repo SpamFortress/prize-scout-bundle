@@ -1,0 +1,4 @@
+CREATE TABLE IF NOT EXISTS app_documents (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);

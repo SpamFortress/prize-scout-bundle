@@ -298,6 +298,7 @@ export function filterPracticeRows(
     query: string;
     sources: readonly Source[];
     method: MethodFilter;
+    frequency?: FrequencyFilter;
     order: PracticeOrder;
     region?: string;
   },
@@ -309,6 +310,7 @@ export function filterPracticeRows(
     if (input.region && (item.region ?? "US") !== input.region) return false;
     if (!input.sources.includes(item.source ?? "web")) return false;
     if (!matchesEntryMethod(item, input.method)) return false;
+    if (!matchesFrequency(item, input.frequency ?? "all")) return false;
     if (!needle) return true;
     const haystack = `${item.title} ${item.prize} ${item.status} ${item.url}`.toLowerCase();
     return haystack.includes(needle);
@@ -350,6 +352,25 @@ export function rowsForPracticeGroups(
 export const SAMPLE_AS_OF = new Date("2027-01-10T12:00:00Z");
 
 export type MethodFilter = "all" | "free" | "paid";
+export type FrequencyFilter = "all" | "daily" | "weekly" | "once" | "unknown";
+
+/** Daily, weekly, or one-time only when the row already states it. Otherwise unknown. */
+export function frequencyBucket(item: { entryClock?: string | null; entryLimit?: string | null }): Exclude<FrequencyFilter, "all"> {
+  const clock = item.entryClock ?? "";
+  if (clock === "calendar_day" || clock === "rolling_24h") return "daily";
+  if (clock === "weekly") return "weekly";
+  if (clock === "once") return "once";
+  const limit = (item.entryLimit ?? "").toLowerCase();
+  if (/\bdaily\b|per day|once a day/.test(limit)) return "daily";
+  if (/\bweekly\b|per week/.test(limit)) return "weekly";
+  if (/\bonce\b|one entry|one-time|one time/.test(limit)) return "once";
+  return "unknown";
+}
+
+export function matchesFrequency(item: { entryClock?: string | null; entryLimit?: string | null }, filter: FrequencyFilter): boolean {
+  if (filter === "all") return true;
+  return frequencyBucket(item) === filter;
+}
 
 /** Entry methods the sample can offer. The filter uses the current button, not this whole list. */
 export function entryMethods(item: EntrySample): Array<"free" | "paid"> {

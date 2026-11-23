@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { classifyRenderedPage, storeRenderedCheck } from "@/server/addon-check";
-import { addonCorsHeaders, authorizeAddonPost } from "@/server/addon-pairing";
+import { addonCorsHeaders, addonPersistence, authorizeAddonPost, preparePairing } from "@/server/addon-pairing";
 import { lookupPublic } from "@/server/check-page";
-import { pdfBytesToHtml } from "@/server/pdf-text";
+import { PdfReadError, pdfBytesToHtml } from "@/server/pdf-text";
 import { hostIsBlocked, ipIsBlocked } from "@/server/ssrf";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +15,7 @@ export async function OPTIONS(request: Request) {
 /** Reads the single PDF the user already opened. It does not search. */
 export async function POST(request: Request) {
   const headers = addonCorsHeaders(request.headers.get("origin"));
+  await preparePairing();
   const auth = authorizeAddonPost(request);
   if (!auth.ok) return NextResponse.json({ ok: false, message: auth.message }, { status: auth.status, headers });
   let body: unknown;
@@ -44,9 +45,16 @@ export async function POST(request: Request) {
   if (!response.ok) {
     return NextResponse.json({ ok: false, message: `The PDF returned HTTP ${response.status}.` }, { status: 422, headers });
   }
-  const html = await pdfBytesToHtml(new Uint8Array(await response.arrayBuffer()));
+  let html = "";
+  try {
+    html = await pdfBytesToHtml(new Uint8Array(await response.arrayBuffer()));
+  } catch (error) {
+    const message = error instanceof PdfReadError ? error.message : "The PDF had no readable text.";
+    return NextResponse.json({ ok: false, message }, { status: 422, headers });
+  }
   if (!html) return NextResponse.json({ ok: false, message: "The PDF had no readable text." }, { status: 422, headers });
   const result = classifyRenderedPage(html, url, new Date());
   storeRenderedCheck(result, new Date().toISOString(), html);
+  await addonPersistence();
   return NextResponse.json({ ok: true, ...result }, { headers });
 }

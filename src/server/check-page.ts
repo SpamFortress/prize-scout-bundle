@@ -1,10 +1,8 @@
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
 import { uniqueId } from "@/domain/ids";
 import { observeHtml } from "@/domain/interpret";
 import type { Contest, RuleProof } from "@/domain/types";
 import { robotsAllows } from "./robots";
-import { hostIsBlocked, ipIsBlocked } from "./ssrf";
+import { hostIsBlocked, ipIsBlocked, isIpAddress } from "./ssrf";
 
 export interface CheckDeps {
   fetchImpl: typeof fetch;
@@ -16,10 +14,32 @@ export type CheckOutcome =
   | { ok: true; status: number; contest: Contest; proof: RuleProof; message: string; html: string }
   | { ok: false; status: number; message: string };
 
+const DOH_URL = "https://cloudflare-dns.com/dns-query";
+
+async function resolveType(hostname: string, type: "A" | "AAAA"): Promise<string[]> {
+  const url = new URL(DOH_URL);
+  url.searchParams.set("name", hostname);
+  url.searchParams.set("type", type);
+  const response = await fetch(url, {
+    redirect: "manual",
+    signal: AbortSignal.timeout(5_000),
+    headers: { accept: "application/dns-json" },
+  });
+  if (response.status >= 300 && response.status < 400) throw new Error("DNS lookup redirected.");
+  if (!response.ok) throw new Error("DNS lookup failed.");
+  const body = (await response.json()) as { Status?: number; Answer?: Array<{ type?: number; data?: string }> };
+  if (body.Status !== 0) return [];
+  const want = type === "A" ? 1 : 28;
+  return (body.Answer ?? []).flatMap((answer) => (answer.type === want && typeof answer.data === "string" ? [answer.data] : []));
+}
+
+/** Resolves a hostname to addresses. An IP is returned as itself. Private ranges are checked by the caller. */
 export async function lookupPublic(hostname: string): Promise<string[]> {
-  if (isIP(hostname)) return [hostname];
-  const records = await lookup(hostname, { all: true, verbatim: true });
-  return records.map((record) => record.address);
+  if (isIpAddress(hostname)) return [hostname];
+  const [v4, v6] = await Promise.all([resolveType(hostname, "A"), resolveType(hostname, "AAAA")]);
+  const addresses = [...v4, ...v6];
+  if (addresses.length === 0) throw new Error("DNS lookup returned no addresses.");
+  return addresses;
 }
 
 /** Reads at most `max` bytes and returns that text. A longer body is cut, not thrown. */

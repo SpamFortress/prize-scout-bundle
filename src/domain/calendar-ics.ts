@@ -1,4 +1,4 @@
-import { nextEligibleAt, type EntryClock, type RulesZone } from "./entry-clock";
+import { nextEligibleAt, nextResetAt, type EntryClock, type ResetFact, type RulesZone } from "./entry-clock";
 
 /** A tracked contest. Dates are copied from the page. A missing end date is null, not a guess. */
 export interface CalendarContest {
@@ -13,6 +13,7 @@ export interface CalendarContest {
   timeZone: string | null;
   entryClock: EntryClock;
   enteredAt: Date | null;
+  reset?: ResetFact | null;
 }
 
 export function calendarHasEnd(item: CalendarContest): boolean {
@@ -100,6 +101,19 @@ function endEvent(item: CalendarContest, now: Date): string[] | null {
 }
 
 function reentryEvent(item: CalendarContest, now: Date): string[] | null {
+  const fromReset = item.reset && item.enteredAt ? nextResetAt(item.reset, item.enteredAt) : null;
+  if (fromReset?.at) {
+    const when = fromReset.at.replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+    const note = fromReset.needsChecking ? fromReset.note : "Next entry uses the reset stated in the rules.";
+    return event([
+      `UID:prize-scout-${item.uid}-reentry@prizescout.local`,
+      `DTSTAMP:${stamp(now)}`,
+      `DTSTART:${when}`,
+      `SUMMARY:${escapeText(`Next entry: ${item.title}`)}`,
+      `DESCRIPTION:${description(item, note)}`,
+      `URL:${item.url}`,
+    ]);
+  }
   if (item.entryClock !== "calendar_day" && item.entryClock !== "weekly" && item.entryClock !== "rolling_24h") return null;
   const zone: RulesZone = { iana: item.timeZone, assumed: item.timeZone === null };
   const next = nextEligibleAt(item.entryClock, item.enteredAt, zone);

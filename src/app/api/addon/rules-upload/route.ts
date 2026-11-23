@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { classifyRenderedPage, storeRenderedCheck } from "@/server/addon-check";
-import { allAddonChecks, appOriginAllowed } from "@/server/addon-pairing";
-import { pdfBytesToHtml } from "@/server/pdf-text";
+import { addonPersistence, allAddonChecks, appOriginAllowed } from "@/server/addon-pairing";
+import { PdfReadError, pdfBytesToHtml } from "@/server/pdf-text";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -18,11 +18,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, message: "Choose a PDF for an https contest row." }, { status: 400 });
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const pdfHtml = await pdfBytesToHtml(bytes);
+  let pdfHtml = "";
+  try {
+    pdfHtml = await pdfBytesToHtml(bytes);
+  } catch (error) {
+    const message = error instanceof PdfReadError ? error.message : "The PDF had no readable text.";
+    return NextResponse.json({ ok: false, message }, { status: 422 });
+  }
   if (!pdfHtml) return NextResponse.json({ ok: false, message: "The PDF had no readable text." }, { status: 422 });
   const prior = (await allAddonChecks()).find((row) => row.url === url);
   const combined = `${prior?.html || ""}\n<section data-uploaded-rules="true">${pdfHtml}</section>`;
   const result = classifyRenderedPage(combined, url, new Date(), prior?.limits ?? []);
   storeRenderedCheck(result, new Date().toISOString(), combined);
+  await addonPersistence();
   return NextResponse.json({ ok: true, ...result });
 }

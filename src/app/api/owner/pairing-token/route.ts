@@ -1,28 +1,37 @@
 import { NextResponse } from "next/server";
-import { appOriginAllowed, rotatePairingToken } from "@/server/addon-pairing";
-import { ownerTokenMatches } from "@/server/owner-gate";
+import { addonPersistence, appOriginAllowed, preparePairing, rotatePairingToken } from "@/server/addon-pairing";
+import { rotateBrowserPairing } from "@/server/browser-pairing";
+import { OWNER_BROWSER_ID } from "@/server/user-scope";
+import { applyBrowserCookie, browserIdFromRequest, requestIsLoopback } from "@/server/browser-id";
+import { clientIp, rateLimit } from "@/server/rate-limit";
+import { ownerRequestAllowed, ownerTokenExpected } from "@/server/owner-gate";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-function loopbackHost(request: Request): boolean {
-  try {
-    const host = new URL(request.url).hostname.replace(/^\[|\]$/g, "");
-    return host === "127.0.0.1" || host === "localhost" || host === "::1";
-  } catch {
-    return false;
-  }
-}
 
 function ownerToken(request: Request): string {
   return request.headers.get("x-owner-token") ?? "";
 }
 
-/** Replaces the add-on pairing token. The previous token stops working immediately. */
+/** Replaces the add-on pairing token for this browser. The previous token for that browser stops working. */
 export async function POST(request: Request) {
-  if (!loopbackHost(request) || !appOriginAllowed(request.headers.get("origin")) || !ownerTokenMatches(ownerToken(request))) {
+  const identity = await browserIdFromRequest(request);
+  const limited = rateLimit({ id: identity.id, ip: clientIp(request) });
+  if (!limited.ok) return NextResponse.json({ ok: false, message: limited.message }, { status: 429 });
+  const expected = await ownerTokenExpected();
+  if (!appOriginAllowed(request.headers.get("origin")) || !ownerRequestAllowed({
+    loopback: requestIsLoopback(request),
+    token: ownerToken(request),
+    browserId: identity.id,
+    expectedToken: expected,
+  })) {
     return NextResponse.json({ ok: false, message: "Owner access is required." }, { status: 403 });
   }
-  const token = rotatePairingToken();
-  return NextResponse.json({ ok: true, token });
+  await preparePairing();
+  const token = process.env.PRIZE_SCOUT_STORE === "d1" && identity.id !== OWNER_BROWSER_ID
+    ? await rotateBrowserPairing(identity.id)
+    : rotatePairingToken();
+  await addonPersistence();
+  const response = NextResponse.json({ ok: true, token });
+  return applyBrowserCookie(response, identity.sealed, request) as NextResponse;
 }

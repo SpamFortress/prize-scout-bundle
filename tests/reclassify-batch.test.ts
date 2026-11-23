@@ -1,9 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
+const PRIVATE_FIXTURES = existsSync(new URL("./fixtures/retest/vance-ruger.html", import.meta.url));
 import { describe, expect, it } from "vitest";
 import { classifyRenderedPage, missingFactsNote, reclassifyStoredChecks } from "@/server/addon-check";
 import type { AddonCheckRecord } from "@/server/addon-pairing";
 
-const PRIVATE_FIXTURES = existsSync(new URL("./fixtures/retest/malecki-entry.html", import.meta.url));
 const NOW = "2026-11-16T12:00:00.000Z";
 const EARLIER = "2026-11-01T12:00:00.000Z";
 

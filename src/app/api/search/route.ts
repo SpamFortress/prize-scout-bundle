@@ -1,18 +1,22 @@
 import { NextResponse } from "next/server";
-import { PAUSE_LINE } from "@/domain/usage";
+import { CAP_LINE, PAUSE_LINE, donationUrl } from "@/domain/usage";
 import { braveCallBudget } from "@/domain/search-yield";
 import { SEARCH_API_KEY_ENV, searchVerifiedGiveaways } from "@/server/giveaway-search";
 import { lookupPublic } from "@/server/check-page";
-import { addBraveRequests, anonIdFromCookie, beginSearch, dailyCap, maybeAlertLowCredit } from "@/server/usage-store";
+import { addBraveRequests, beginSearch, dailyCap, maybeAlertLowCredit } from "@/server/usage-store";
+import { applyBrowserCookie, browserIdFromRequest } from "@/server/browser-id";
+import { clientIp, rateLimit } from "@/server/rate-limit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-function withAnon(response: NextResponse, id: string, fresh: boolean): NextResponse {
-  if (fresh) {
-    response.cookies.set("ps_anon", id, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 400 });
-  }
-  return response;
+function withBrowser(response: NextResponse, request: Request, sealed: string | null): NextResponse {
+  return applyBrowserCookie(response, sealed, request) as NextResponse;
+}
+
+function pausePayload(reason: string | undefined): { pauseLine: string; donationUrl: string | null } {
+  if (reason === "cap" || reason === "global") return { pauseLine: CAP_LINE, donationUrl: donationUrl() || null };
+  return { pauseLine: PAUSE_LINE, donationUrl: null };
 }
 
 export async function POST(request: Request) {
@@ -28,12 +32,21 @@ export async function POST(request: Request) {
   if (!query.trim()) {
     return NextResponse.json({ ok: false, paused: false, listings: [], message: "A blank search is not sent.", submitted: false }, { status: 400 });
   }
-  const anon = anonIdFromCookie(request.headers.get("cookie"));
-  const hasKey = Boolean(process.env[SEARCH_API_KEY_ENV]?.trim());
+  const identity = await browserIdFromRequest(request);
+  const limited = rateLimit({ id: identity.id, ip: clientIp(request) });
+  if (!limited.ok) return withBrowser(NextResponse.json({ ok: false, paused: true, pauseLine: limited.message, listings: [], submitted: false }, { status: 429 }), request, identity.sealed);
+  const hasKey = Boolean(process.env[SEARCH_API_KEY_ENV]?.trim()) || process.env.PRIZE_SCOUT_SEARCH_DRY_RUN === "1";
   try {
-    const gate = await beginSearch({ anonId: anon.id, hasKey });
+    const gate = await beginSearch({ anonId: identity.id, hasKey, query });
+    if (gate.cached) {
+      return withBrowser(NextResponse.json({ ok: true, paused: false, cached: true, listings: [], submitted: false }), request, identity.sealed);
+    }
     if (gate.paused) {
-      return withAnon(NextResponse.json({ ok: true, paused: true, pauseLine: PAUSE_LINE, listings: [], submitted: false }), anon.id, anon.fresh);
+      const pause = pausePayload(gate.reason);
+      return withBrowser(NextResponse.json({ ok: true, paused: true, pauseLine: pause.pauseLine, donationUrl: pause.donationUrl, listings: [], submitted: false }), request, identity.sealed);
+    }
+    if (process.env.PRIZE_SCOUT_SEARCH_DRY_RUN === "1") {
+      return withBrowser(NextResponse.json({ ok: true, paused: false, listings: [], submitted: false, dryRun: true }), request, identity.sealed);
     }
     const wanted = braveCallBudget(query, offset);
     const extras = Math.min(Math.max(0, wanted - 1), Math.max(0, dailyCap() - gate.visitorSearches), gate.summary.searchesLeft ?? Math.max(0, wanted - 1));
@@ -49,7 +62,7 @@ export async function POST(request: Request) {
     if (result.braveCalls > 1) await addBraveRequests(result.braveCalls - 1);
     const blocked = result.httpStatus === 401 || result.httpStatus === 402 || result.httpStatus === 403 || result.httpStatus === 429;
     if (gate.summary.low) await maybeAlertLowCredit(gate.summary);
-    return withAnon(
+    return withBrowser(
       NextResponse.json({
         ok: true,
         paused: blocked,
@@ -59,17 +72,17 @@ export async function POST(request: Request) {
         pagesNotOpened: result.pagesNotOpened,
         submitted: false,
       }),
-      anon.id,
-      anon.fresh,
+      request,
+      identity.sealed,
     );
   } catch (error) {
     const name = error instanceof Error ? error.name : "Error";
     const code = error && typeof error === "object" && "code" in error && (typeof error.code === "string" || typeof error.code === "number") ? error.code : null;
     console.error(JSON.stringify({ step: "search", name, code }));
-    return withAnon(
+    return withBrowser(
       NextResponse.json({ ok: false, error: "search_failed", paused: false, listings: [], submitted: false }, { status: 502 }),
-      anon.id,
-      anon.fresh,
+      request,
+      identity.sealed,
     );
   }
 }

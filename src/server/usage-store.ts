@@ -1,6 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { dataDirectory, openDocumentStore, readFsDocument, writeFsDocument } from "./document-store";
 import {
   emptyUsage,
   recordAllowedSearch,
@@ -12,16 +12,28 @@ import {
   searchGate,
   sumSearches,
   utcDay,
+  capDay,
+  alreadyServed,
+  rememberServed,
+  donationUrl,
+  DEFAULT_FREE_DAILY_CAP,
+  CAP_LINE,
   daysInRange,
   visitorSearchesOn,
   dailyVisitorHash,
-  DEFAULT_DAILY_CAP,
   type UsageSnapshot,
 } from "@/domain/usage";
 import { notifierFromEnv, type CreditNotifier, type LowCreditNotice } from "@/domain/credit-alert";
 
-function usageFile(): string {
-  return process.env.PRIZE_SCOUT_USAGE_FILE?.trim() || path.join(process.cwd(), "data", "usage.json");
+const USAGE_KEY = "usage";
+
+function usageDirectory(): string {
+  const file = process.env.PRIZE_SCOUT_USAGE_FILE?.trim();
+  return file ? path.dirname(file) : dataDirectory();
+}
+
+function usageUsesD1(): boolean {
+  return process.env.PRIZE_SCOUT_STORE === "d1" && !process.env.PRIZE_SCOUT_USAGE_FILE?.trim();
 }
 
 let chain: Promise<unknown> = Promise.resolve();
@@ -42,9 +54,15 @@ function numberFromEnv(name: string): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
+async function readUsageText(): Promise<string | null> {
+  if (usageUsesD1()) return (await openDocumentStore()).read(USAGE_KEY);
+  return readFsDocument(usageDirectory(), USAGE_KEY);
+}
+
 export async function readUsage(): Promise<UsageSnapshot> {
   try {
-    const text = await readFile(usageFile(), "utf8");
+    const text = await readUsageText();
+    if (!text) return emptyUsage(randomBytes(16).toString("hex"));
     const parsed = JSON.parse(text) as UsageSnapshot;
     if (!parsed || typeof parsed !== "object" || typeof parsed.salt !== "string") return emptyUsage(randomBytes(16).toString("hex"));
     return {
@@ -58,16 +76,29 @@ export async function readUsage(): Promise<UsageSnapshot> {
 }
 
 async function writeUsage(snapshot: UsageSnapshot): Promise<void> {
-  const file = usageFile();
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, JSON.stringify(snapshot), "utf8");
+  const body = JSON.stringify(snapshot);
+  if (usageUsesD1()) {
+    await (await openDocumentStore()).write(USAGE_KEY, body);
+    return;
+  }
+  writeFsDocument(usageDirectory(), USAGE_KEY, body);
 }
 
 export function dailyCap(): number {
-  const raw = numberFromEnv("PRIZE_SCOUT_SEARCH_DAILY_CAP");
-  if (raw === null || raw < 1) return DEFAULT_DAILY_CAP;
+  const free = numberFromEnv("PRIZE_SCOUT_FREE_DAILY_CAP");
+  if (free !== null && free >= 1) return Math.floor(free);
+  const legacy = numberFromEnv("PRIZE_SCOUT_SEARCH_DAILY_CAP");
+  if (legacy !== null && legacy >= 1) return Math.floor(legacy);
+  return DEFAULT_FREE_DAILY_CAP;
+}
+
+export function globalDailyCap(): number | null {
+  const raw = numberFromEnv("PRIZE_SCOUT_GLOBAL_DAILY_CAP");
+  if (raw === null || raw < 1) return null;
   return Math.floor(raw);
 }
+
+export { donationUrl, CAP_LINE };
 
 export function effectiveStartingCredit(snapshot: UsageSnapshot): number | null {
   if (snapshot.startingCreditUsd !== null) return snapshot.startingCreditUsd;
@@ -104,7 +135,7 @@ export interface UsageSummary {
 }
 
 export function summarize(snapshot: UsageSnapshot, now: Date): UsageSummary {
-  const day = utcDay(now);
+  const day = capDay(now);
   const week = daysInRange(day, 7);
   const today = snapshot.days[day];
   const starting = effectiveStartingCredit(snapshot);
@@ -155,12 +186,15 @@ export interface RecordResult {
 }
 
 /** Decides whether this visitor may spend a Brave credit, and records the search when they may. */
-export async function beginSearch(input: { anonId: string; hasKey: boolean; now?: Date }): Promise<RecordResult> {
+export async function beginSearch(input: { anonId: string; hasKey: boolean; now?: Date; query?: string }): Promise<RecordResult & { cached?: boolean; reason?: string }> {
   const now = input.now ?? new Date();
   return withLock(async () => {
     const current = await readUsage();
-    const day = utcDay(now);
+    const day = capDay(now);
     const visitorHash = dailyVisitorHash(input.anonId, day, current.salt);
+    const query = input.query?.trim().toLowerCase() ?? "";
+    const cached = query.length > 0 && alreadyServed(current, day, visitorHash, query);
+    const todayTotal = current.days[day]?.searches ?? 0;
     const gate = searchGate({
       hasKey: input.hasKey,
       startingCreditUsd: effectiveStartingCredit(current),
@@ -168,11 +202,18 @@ export async function beginSearch(input: { anonId: string; hasKey: boolean; now?
       costPerRequestUsd: effectiveCost(current),
       searchesByVisitor: visitorSearchesOn(current, day, visitorHash),
       cap: dailyCap(),
+      globalToday: todayTotal,
+      globalCap: globalDailyCap(),
+      cached,
     });
-    if (gate.paused) return { paused: true, summary: summarize(current, now), visitorHash, visitorSearches: visitorSearchesOn(current, day, visitorHash) };
-    const next = recordAllowedSearch(current, day, visitorHash, true);
+    if (gate.reason === "cached") {
+      return { paused: false, cached: true, reason: "cached", summary: summarize(current, now), visitorHash, visitorSearches: visitorSearchesOn(current, day, visitorHash) };
+    }
+    if (gate.paused) return { paused: true, reason: gate.reason, summary: summarize(current, now), visitorHash, visitorSearches: visitorSearchesOn(current, day, visitorHash) };
+    const counted = recordAllowedSearch(current, day, visitorHash, true);
+    const next = query ? rememberServed(counted, day, visitorHash, query) : counted;
     await writeUsage(next);
-    return { paused: false, summary: summarize(next, now), visitorHash, visitorSearches: visitorSearchesOn(next, day, visitorHash) };
+    return { paused: false, reason: "ok", summary: summarize(next, now), visitorHash, visitorSearches: visitorSearchesOn(next, day, visitorHash) };
   });
 }
 

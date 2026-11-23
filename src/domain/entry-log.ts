@@ -1,3 +1,4 @@
+import type { ResetKind } from "./entry-clock";
 import type { RedactedEntryHandoff } from "./fortress";
 
 /** The only fields kept after a confirmed entry. */
@@ -8,6 +9,12 @@ export interface EntryLogRecord {
   aliasOrTag: string;
   rulesUrl: string | null;
   endDate: string | null;
+  /** Present when the rules stated a reset. Older logs omit it. */
+  resetKind?: ResetKind;
+  resetTimeZone?: string | null;
+  rollingHours?: number | null;
+  nextEligible?: string | null;
+  resetNote?: string | null;
 }
 
 const SECRET = /\b\d{3}-\d{2}-\d{4}\b|\b(?:password|passcode|one-time code|2fa|otp|ssn|social security|government id|driver'?s license|tax form|w-2|1099)\b|\b(?:\d[ -]?){13,19}\b/i;
@@ -34,6 +41,15 @@ export function entryLogRecord(input: EntryLogRecord): { ok: true; record: Entry
       aliasOrTag: input.aliasOrTag.trim().slice(0, 254),
       rulesUrl: input.rulesUrl,
       endDate: input.endDate,
+      ...(input.resetKind
+        ? {
+            resetKind: input.resetKind,
+            resetTimeZone: input.resetTimeZone ?? null,
+            rollingHours: input.rollingHours ?? null,
+            nextEligible: input.nextEligible ?? null,
+            resetNote: input.resetNote ?? null,
+          }
+        : {}),
     },
   };
 }

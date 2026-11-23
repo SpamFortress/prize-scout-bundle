@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 import { DEFAULT_CHECKED, type Cost, type Order } from "@/app/design-preview/sample-data";
-import { addPracticeSearch, commitPracticeSearch, parkPracticeSearch, type MethodFilter, type PracticeOrder, type PracticeScope, type PracticeSearchGroup } from "@/app/design-preview/entries-sample";
+import { addPracticeSearch, commitPracticeSearch, parkPracticeSearch, type FrequencyFilter, type MethodFilter, type PracticeOrder, type PracticeScope, type PracticeSearchGroup } from "@/app/design-preview/entries-sample";
 import { SAMPLE_RECEIPTS, type SampleReceipt } from "@/app/design-preview/profile-sample";
 import type { EntryLogRecord, PreparedContestHandoff } from "@/domain/entry-log";
 import type { Source } from "@/domain/types";
@@ -12,6 +12,7 @@ export interface TabFilter {
   query: string;
   sources: Source[];
   method: MethodFilter;
+  frequency: FrequencyFilter;
   order: PracticeOrder;
   region: string;
 }
@@ -20,6 +21,7 @@ const EMPTY_FILTER = (): TabFilter => ({
   query: "",
   sources: ["web", "x", "facebook", "instagram"],
   method: "all",
+  frequency: "all",
   order: "newest",
   region: "US",
 });

@@ -15,11 +15,11 @@
 
 # next.js
 /.next/
-/.open-next/
-/.wrangler/
 .next-vitest/
 /.next-vitest/
 /out/
+.open-next/
+.wrangler/
 
 # production
 /build
@@ -41,10 +41,11 @@ yarn-error.log*
 # local app data, if a later build writes any
 /data
 /data/**
+.dev.vars
 owner-link.txt
 *.zip
-
-# Private golden pages and fetched contest HTML stay off this public repo.
+.open-next/
+.wrangler/
 /tests/fixtures/stress/
 /tests/fixtures/retest/*.html
 /tests/fixtures/retest/**/*.html

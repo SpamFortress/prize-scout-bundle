@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+const PRIVATE_FIXTURES = existsSync(new URL("./fixtures/retest/vance-ruger.html", import.meta.url));
 import { describe, expect, it } from "vitest";
 import { formatAddonEnd, statedEndIso } from "@/domain/dates";
 import { applyAddonOverlay, enterMode, rulesReading, type EntrySample } from "@/app/design-preview/entries-sample";
@@ -10,7 +11,6 @@ import { classifyAttachedRules, classifyRenderedPage, mergeCheckedRows, notConte
 import { listAddonChecks, resetAddonChecksForTests, saveAddonCheck, setPairingTokenForTests } from "@/server/addon-pairing";
 import { pdfBytesToHtml } from "@/server/pdf-text";
 
-const PRIVATE_FIXTURES = existsSync(new URL("./fixtures/retest/vance-ruger.html", import.meta.url));
 const NOW = new Date("2026-11-16T12:00:00.000Z");
 
 function page(title: string, body: string): string {
