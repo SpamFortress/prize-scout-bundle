@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { dataDirectory, openDocumentStore, readFsDocument, writeFsDocument } from "./document-store";
+import { macDocumentKey } from "./legacy-docs";
 
 export const PAIRING_EXPIRED_MESSAGE = "Pairing expired, paste the new token";
 const PAIRING_REJECTED_MESSAGE = "Pairing token was missing or wrong.";
@@ -102,22 +103,30 @@ function pairingBody(token: string, previous: string | null): string {
   return `${JSON.stringify({ token, previous })}\n`;
 }
 
+function pairingKey(): string {
+  return macDocumentKey("pairing", PAIRING_KEY, Boolean(pairingFileOverride()));
+}
+
+function checksKey(): string {
+  return macDocumentKey("checks", CHECKS_KEY, Boolean(checksFileOverride()));
+}
+
 function readPairingSync(): { token: string; previous: string | null } | null {
-  return parsePairing(readFsDocument(pairingDirectory(), PAIRING_KEY));
+  return parsePairing(readFsDocument(pairingDirectory(), pairingKey()));
 }
 
 async function readPairingDocument(): Promise<{ token: string; previous: string | null } | null> {
-  if (pairingUsesD1()) return parsePairing(await (await openDocumentStore()).read(PAIRING_KEY));
+  if (pairingUsesD1()) return parsePairing(await (await openDocumentStore()).read(pairingKey()));
   return readPairingSync();
 }
 
 function writePairingFile(token: string, previous: string | null): void {
   const body = pairingBody(token, previous);
   if (pairingUsesD1()) {
-    pairingWrite = openDocumentStore().then((store) => store.write(PAIRING_KEY, body));
+    pairingWrite = openDocumentStore().then((store) => store.write(pairingKey(), body));
     return;
   }
-  writeFsDocument(pairingDirectory(), PAIRING_KEY, body, { mode: 0o600 });
+  writeFsDocument(pairingDirectory(), pairingKey(), body, { mode: 0o600 });
 }
 
 function diskEnabled(): boolean {
@@ -150,16 +159,16 @@ function checksBody(): string {
 function writeChecksDocument(): void {
   const body = checksBody();
   if (checksUseD1()) {
-    checksWrite = openDocumentStore().then((store) => store.write(CHECKS_KEY, body));
+    checksWrite = openDocumentStore().then((store) => store.write(checksKey(), body));
     return;
   }
-  writeFsDocument(checksDirectory(), CHECKS_KEY, body);
+  writeFsDocument(checksDirectory(), checksKey(), body);
 }
 
 async function readChecksDocument(): Promise<AddonCheckRecord[]> {
   if (!diskEnabled()) return [];
   const { reclassifyStoredChecks } = await import("./addon-check");
-  const raw = checksUseD1() ? await (await openDocumentStore()).read(CHECKS_KEY) : readFsDocument(checksDirectory(), CHECKS_KEY);
+  const raw = checksUseD1() ? await (await openDocumentStore()).read(checksKey()) : readFsDocument(checksDirectory(), checksKey());
   return reclassifyStoredChecks(parseStoredChecks(raw));
 }
 

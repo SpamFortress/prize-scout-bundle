@@ -1,15 +1,20 @@
 import { FORTRESS_CHAT_ASK } from "@/domain/chat";
 import { IDENTITY_CHAT_LABEL, IDENTITY_REMOVAL_ASK, IDENTITY_REMOVAL_GUIDANCE } from "@/domain/fortress";
 import { CleanupRow } from "@/components/cleanup-row";
+import { DonationMeter } from "@/components/donation-meter";
 import { CHAT_URL, PREVIEW_URL } from "@/domain/types";
+import { publicMeter } from "@/server/donation-store";
+import { OWNER_BROWSER_ID } from "@/server/user-scope";
 
-export default function AboutPage() {
+export default async function AboutPage() {
+  const meter = await publicMeter(OWNER_BROWSER_ID);
   return (
     <main className="mx-auto max-w-3xl space-y-6 px-4 pt-20 pb-16 text-[#202124]">
       <h1 className="text-3xl font-normal">About</h1>
       <p>
         Prize Scout keeps a short list of official pages you ask it to fetch, and it can ask Prize Scout chat to search. The search box in this app does not search the public web.
       </p>
+      <DonationMeter coveredUsd={meter.coveredUsd} budgetUsd={meter.budgetUsd} bonus={meter.bonus} claimCode={meter.claimCode} donationUrl={meter.donationUrl || null} />
       <h2 className="text-xl">What this app can do</h2>
       <ul className="list-disc space-y-1 pl-5 text-sm text-[#3c4043]">
         <li>Ask Prize Scout chat to search. The search box in this app does not search the web.</li>

@@ -1,7 +1,7 @@
 /** Stable id for the Mac practice copy and for legacy files that had no browser id. */
 export const OWNER_BROWSER_ID = "owner";
 
-export type UserDocKind = "checks" | "pairing" | "usage" | "saved" | "entries" | "profile" | "cache";
+export type UserDocKind = "checks" | "pairing" | "usage" | "saved" | "entries" | "profile" | "cache" | "bonus";
 
 const LEGACY: Partial<Record<UserDocKind, string>> = {
   checks: "addon-checks",

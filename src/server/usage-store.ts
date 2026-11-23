@@ -1,7 +1,9 @@
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { dataDirectory, openDocumentStore, readFsDocument, writeFsDocument } from "./document-store";
+import { macDocumentKey } from "./legacy-docs";
 import { readSearchCache } from "./search-cache";
+import { drawExtraSearch, noteSearchSpend } from "./donation-store";
 import {
   emptyUsage,
   recordAllowedSearch,
@@ -53,9 +55,13 @@ function numberFromEnv(name: string): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
+function usageKey(): string {
+  return macDocumentKey("usage", USAGE_KEY, Boolean(process.env.PRIZE_SCOUT_USAGE_FILE?.trim()));
+}
+
 async function readUsageText(): Promise<string | null> {
-  if (usageUsesD1()) return (await openDocumentStore()).read(USAGE_KEY);
-  return readFsDocument(usageDirectory(), USAGE_KEY);
+  if (usageUsesD1()) return (await openDocumentStore()).read(usageKey());
+  return readFsDocument(usageDirectory(), usageKey());
 }
 
 export async function readUsage(): Promise<UsageSnapshot> {
@@ -77,10 +83,10 @@ export async function readUsage(): Promise<UsageSnapshot> {
 async function writeUsage(snapshot: UsageSnapshot): Promise<void> {
   const body = JSON.stringify(snapshot);
   if (usageUsesD1()) {
-    await (await openDocumentStore()).write(USAGE_KEY, body);
+    await (await openDocumentStore()).write(usageKey(), body);
     return;
   }
-  writeFsDocument(usageDirectory(), USAGE_KEY, body);
+  writeFsDocument(usageDirectory(), usageKey(), body);
 }
 
 export function dailyCap(): number {
@@ -218,10 +224,21 @@ export async function beginSearch(input: { anonId: string; hasKey: boolean; now?
         visitorSearches: visitorSearchesOn(current, day, visitorHash),
       };
     }
+    const freeLeft = visitorSearchesOn(current, day, visitorHash) < dailyCap();
+    if (!freeLeft && gate.reason === "cap" && input.hasKey) {
+      const extra = await drawExtraSearch(input.anonId, day, now);
+      if (extra) {
+        const next = recordAllowedSearch(current, day, visitorHash, true);
+        await writeUsage(next);
+        await noteSearchSpend(now, extra);
+        return { paused: false, reason: extra, summary: summarize(next, now), visitorHash, visitorSearches: visitorSearchesOn(next, day, visitorHash) };
+      }
+    }
     if (gate.paused) return { paused: true, reason: gate.reason, summary: summarize(current, now), visitorHash, visitorSearches: visitorSearchesOn(current, day, visitorHash) };
     const next = recordAllowedSearch(current, day, visitorHash, true);
     await writeUsage(next);
-    return { paused: false, reason: "ok", summary: summarize(next, now), visitorHash, visitorSearches: visitorSearchesOn(next, day, visitorHash) };
+    await noteSearchSpend(now, "free");
+    return { paused: false, reason: "free", summary: summarize(next, now), visitorHash, visitorSearches: visitorSearchesOn(next, day, visitorHash) };
   });
 }
 

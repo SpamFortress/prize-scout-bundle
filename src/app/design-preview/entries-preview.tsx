@@ -37,6 +37,7 @@ function calendarFromSample(item: EntrySample): CalendarContest {
 import { applyLiveFilters, LIVE_SOURCES, OPEN_LIVE_FILTERS, type LiveFilterState } from "@/domain/live-filters";
 import { bucketRows } from "@/config/results-view";
 import { PAUSE_LINE } from "@/domain/usage";
+import { DonationMeter } from "@/components/donation-meter";
 import { mailCardLayoutFixture } from "@/domain/rules-facts";
 import type { VerifiedPracticeRow } from "@/domain/verified-entry";
 import { MailInPrintCard } from "@/components/mail-card";
@@ -147,6 +148,7 @@ export function EntriesPreview({ onBack, scope, front = false }: { onBack?: () =
   const [searchPaused, setSearchPaused] = useState(false);
   const [pauseLine, setPauseLine] = useState(PAUSE_LINE);
   const [donationHref, setDonationHref] = useState("");
+  const [meter, setMeter] = useState<{ coveredUsd: number; budgetUsd: number; bonus: number; claimCode: string; donationUrl: string | null } | null>(null);
   const [tip, setTip] = useState<{ url: string; searchesPerDollar: number } | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [addonChecks, setAddonChecks] = useState<Record<string, { checkedByYou?: boolean; listingGroup?: string; rulesNote?: string; addonVersion?: string; endIso?: string | null; openRulesUrl?: string | null }>>({});
@@ -294,6 +296,27 @@ export function EntriesPreview({ onBack, scope, front = false }: { onBack?: () =
       stop = true;
     };
   }, [liveRows]);
+
+  useEffect(() => {
+    if (scope !== "home") return;
+    let cancelled = false;
+    fetch("/api/donations")
+      .then((response) => response.json())
+      .then((body: { ok?: boolean; coveredUsd?: number; budgetUsd?: number; bonus?: number; claimCode?: string; donationUrl?: string | null }) => {
+        if (cancelled || !body.ok) return;
+        setMeter({
+          coveredUsd: body.coveredUsd ?? 0,
+          budgetUsd: body.budgetUsd ?? 0,
+          bonus: body.bonus ?? 0,
+          claimCode: body.claimCode ?? "",
+          donationUrl: body.donationUrl ?? null,
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [scope, searchPaused]);
 
   useEffect(() => {
     if (scope !== "home") return;
@@ -454,6 +477,7 @@ export function EntriesPreview({ onBack, scope, front = false }: { onBack?: () =
               {notice}
             </p>
           ) : null}
+          {meter ? <DonationMeter coveredUsd={meter.coveredUsd} budgetUsd={meter.budgetUsd} bonus={meter.bonus} claimCode={meter.claimCode} donationUrl={meter.donationUrl} /> : null}
           {searchPaused ? (
             <p className="mt-8 text-sm text-[#3c4043]" data-search-paused="yes">
               {pauseLine}

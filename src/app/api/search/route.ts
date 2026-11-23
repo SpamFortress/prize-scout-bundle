@@ -49,7 +49,7 @@ export async function POST(request: Request) {
     if (process.env.PRIZE_SCOUT_SEARCH_DRY_RUN === "1") {
       const listings = [{ url: `https://example.com/dry?q=${encodeURIComponent(query.trim().toLowerCase())}`, title: query.trim(), listingGroup: "check" }];
       await writeSearchCache(identity.id, capDay(new Date()), query, { listings, nextOffset: null }, offset);
-      return withBrowser(NextResponse.json({ ok: true, paused: false, listings, submitted: false, dryRun: true }), request, identity.sealed);
+      return withBrowser(NextResponse.json({ ok: true, paused: false, listings, submitted: false, dryRun: true, funded: gate.reason }), request, identity.sealed);
     }
     const wanted = braveCallBudget(query, offset);
     const extras = Math.min(Math.max(0, wanted - 1), Math.max(0, dailyCap() - gate.visitorSearches), gate.summary.searchesLeft ?? Math.max(0, wanted - 1));
@@ -75,6 +75,7 @@ export async function POST(request: Request) {
         nextOffset: blocked ? null : result.nextOffset,
         pagesNotOpened: result.pagesNotOpened,
         submitted: false,
+        funded: gate.reason,
       }),
       request,
       identity.sealed,

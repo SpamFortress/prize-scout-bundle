@@ -46,6 +46,7 @@ describe("mocked Brave search", () => {
       PRIZE_SCOUT_SEARCH_API_KEY: "test-token",
       PRIZE_SCOUT_SEARCH_URL: `${mock.origin}/search`,
       PRIZE_SCOUT_USAGE_FILE: path.join(dir, "usage.json"),
+      PRIZE_SCOUT_DATA_DIR: dir,
       PRIZE_SCOUT_BRAVE_CREDIT_USD: "10",
       PRIZE_SCOUT_OWNER_TOKEN: "owner-test-token",
       PRIZE_SCOUT_TIP_URL: "https://ko-fi.com/example",
