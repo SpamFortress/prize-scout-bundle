@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Prize Scout",
+  "version": "0.2.2",
+  "description": "Check the sweepstakes page you opened. It does not search, submit, or prefill.",
+  "action": {
+    "default_title": "Check this page",
+    "default_popup": "popup.html"
+  },
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "https://sweepwidget.com/*",
+    "https://www.sweepwidget.com/*",
+    "https://embed.sweepwidget.com/*",
+    "https://*.sweepwidget.com/*",
+    "https://gleam.io/*",
+    "https://www.gleam.io/*",
+    "https://js.gleam.io/*",
+    "https://embed.gleam.io/*",
+    "https://*.gleam.io/*",
+    "https://viralsweep.com/*",
+    "https://*.viralsweep.com/*",
+    "https://woobox.com/*",
+    "https://*.woobox.com/*",
+    "https://rafflecopter.com/*",
+    "https://*.rafflecopter.com/*",
+    "https://kingsumo.com/*",
+    "https://*.kingsumo.com/*",
+    "https://shortstack.com/*",
+    "https://*.shortstack.com/*",
+    "https://shortstackapp.com/*",
+    "https://*.shortstackapp.com/*",
+    "https://wishpond.com/*",
+    "https://*.wishpond.com/*",
+    "https://upviral.com/*",
+    "https://*.upviral.com/*"
+  ]
+}
