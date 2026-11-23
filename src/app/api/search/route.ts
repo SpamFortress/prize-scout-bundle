@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
-import { CAP_LINE, PAUSE_LINE, donationUrl } from "@/domain/usage";
+import { CAP_LINE, PAUSE_LINE, capDay, donationUrl } from "@/domain/usage";
 import { braveCallBudget } from "@/domain/search-yield";
 import { SEARCH_API_KEY_ENV, searchVerifiedGiveaways } from "@/server/giveaway-search";
 import { lookupPublic } from "@/server/check-page";
 import { addBraveRequests, beginSearch, dailyCap, maybeAlertLowCredit } from "@/server/usage-store";
 import { applyBrowserCookie, browserIdFromRequest } from "@/server/browser-id";
 import { clientIp, rateLimit } from "@/server/rate-limit";
+import { writeSearchCache } from "@/server/search-cache";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -37,16 +38,18 @@ export async function POST(request: Request) {
   if (!limited.ok) return withBrowser(NextResponse.json({ ok: false, paused: true, pauseLine: limited.message, listings: [], submitted: false }, { status: 429 }), request, identity.sealed);
   const hasKey = Boolean(process.env[SEARCH_API_KEY_ENV]?.trim()) || process.env.PRIZE_SCOUT_SEARCH_DRY_RUN === "1";
   try {
-    const gate = await beginSearch({ anonId: identity.id, hasKey, query });
+    const gate = await beginSearch({ anonId: identity.id, hasKey, query, offset });
     if (gate.cached) {
-      return withBrowser(NextResponse.json({ ok: true, paused: false, cached: true, listings: [], submitted: false }), request, identity.sealed);
+      return withBrowser(NextResponse.json({ ok: true, paused: false, cached: true, listings: gate.listings ?? [], nextOffset: gate.nextOffset ?? null, submitted: false }), request, identity.sealed);
     }
     if (gate.paused) {
       const pause = pausePayload(gate.reason);
       return withBrowser(NextResponse.json({ ok: true, paused: true, pauseLine: pause.pauseLine, donationUrl: pause.donationUrl, listings: [], submitted: false }), request, identity.sealed);
     }
     if (process.env.PRIZE_SCOUT_SEARCH_DRY_RUN === "1") {
-      return withBrowser(NextResponse.json({ ok: true, paused: false, listings: [], submitted: false, dryRun: true }), request, identity.sealed);
+      const listings = [{ url: `https://example.com/dry?q=${encodeURIComponent(query.trim().toLowerCase())}`, title: query.trim(), listingGroup: "check" }];
+      await writeSearchCache(identity.id, capDay(new Date()), query, { listings, nextOffset: null }, offset);
+      return withBrowser(NextResponse.json({ ok: true, paused: false, listings, submitted: false, dryRun: true }), request, identity.sealed);
     }
     const wanted = braveCallBudget(query, offset);
     const extras = Math.min(Math.max(0, wanted - 1), Math.max(0, dailyCap() - gate.visitorSearches), gate.summary.searchesLeft ?? Math.max(0, wanted - 1));
@@ -61,6 +64,7 @@ export async function POST(request: Request) {
     });
     if (result.braveCalls > 1) await addBraveRequests(result.braveCalls - 1);
     const blocked = result.httpStatus === 401 || result.httpStatus === 402 || result.httpStatus === 403 || result.httpStatus === 429;
+    if (!blocked) await writeSearchCache(identity.id, capDay(new Date()), query, { listings: result.listings, nextOffset: result.nextOffset }, offset);
     if (gate.summary.low) await maybeAlertLowCredit(gate.summary);
     return withBrowser(
       NextResponse.json({

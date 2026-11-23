@@ -1,6 +1,7 @@
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { dataDirectory, openDocumentStore, readFsDocument, writeFsDocument } from "./document-store";
+import { readSearchCache } from "./search-cache";
 import {
   emptyUsage,
   recordAllowedSearch,
@@ -13,8 +14,6 @@ import {
   sumSearches,
   utcDay,
   capDay,
-  alreadyServed,
-  rememberServed,
   donationUrl,
   DEFAULT_FREE_DAILY_CAP,
   CAP_LINE,
@@ -186,14 +185,15 @@ export interface RecordResult {
 }
 
 /** Decides whether this visitor may spend a Brave credit, and records the search when they may. */
-export async function beginSearch(input: { anonId: string; hasKey: boolean; now?: Date; query?: string }): Promise<RecordResult & { cached?: boolean; reason?: string }> {
+export async function beginSearch(input: { anonId: string; hasKey: boolean; now?: Date; query?: string; offset?: number }): Promise<RecordResult & { cached?: boolean; reason?: string; listings?: unknown[]; nextOffset?: number | null }> {
   const now = input.now ?? new Date();
   return withLock(async () => {
     const current = await readUsage();
     const day = capDay(now);
     const visitorHash = dailyVisitorHash(input.anonId, day, current.salt);
-    const query = input.query?.trim().toLowerCase() ?? "";
-    const cached = query.length > 0 && alreadyServed(current, day, visitorHash, query);
+    const query = input.query?.trim() ?? "";
+    const offset = input.offset ?? 0;
+    const saved = query ? await readSearchCache(input.anonId, day, query, offset) : null;
     const todayTotal = current.days[day]?.searches ?? 0;
     const gate = searchGate({
       hasKey: input.hasKey,
@@ -204,14 +204,22 @@ export async function beginSearch(input: { anonId: string; hasKey: boolean; now?
       cap: dailyCap(),
       globalToday: todayTotal,
       globalCap: globalDailyCap(),
-      cached,
+      cached: Boolean(saved),
     });
-    if (gate.reason === "cached") {
-      return { paused: false, cached: true, reason: "cached", summary: summarize(current, now), visitorHash, visitorSearches: visitorSearchesOn(current, day, visitorHash) };
+    if (gate.reason === "cached" && saved) {
+      return {
+        paused: false,
+        cached: true,
+        reason: "cached",
+        listings: saved.listings,
+        nextOffset: saved.nextOffset,
+        summary: summarize(current, now),
+        visitorHash,
+        visitorSearches: visitorSearchesOn(current, day, visitorHash),
+      };
     }
     if (gate.paused) return { paused: true, reason: gate.reason, summary: summarize(current, now), visitorHash, visitorSearches: visitorSearchesOn(current, day, visitorHash) };
-    const counted = recordAllowedSearch(current, day, visitorHash, true);
-    const next = query ? rememberServed(counted, day, visitorHash, query) : counted;
+    const next = recordAllowedSearch(current, day, visitorHash, true);
     await writeUsage(next);
     return { paused: false, reason: "ok", summary: summarize(next, now), visitorHash, visitorSearches: visitorSearchesOn(next, day, visitorHash) };
   });

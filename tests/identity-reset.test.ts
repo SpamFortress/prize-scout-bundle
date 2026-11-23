@@ -10,11 +10,13 @@ import { openBrowserId, sealBrowserId } from "@/server/browser-id";
 import { migrateLegacyOwner, ownerCheckCount } from "@/server/legacy-docs";
 import { beginSearch } from "@/server/usage-store";
 import { writeFsDocument } from "@/server/document-store";
+import { readSearchCache, writeSearchCache } from "@/server/search-cache";
 
 const dirs: string[] = [];
 
 afterEach(() => {
   delete process.env.PRIZE_SCOUT_USAGE_FILE;
+  delete process.env.PRIZE_SCOUT_DATA_DIR;
   delete process.env.PRIZE_SCOUT_FREE_DAILY_CAP;
   delete process.env.PRIZE_SCOUT_GLOBAL_DAILY_CAP;
   delete process.env.PRIZE_SCOUT_COOKIE_SECRET;
@@ -120,6 +122,7 @@ describe("free search cap", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "cap-"));
     dirs.push(dir);
     process.env.PRIZE_SCOUT_USAGE_FILE = path.join(dir, "usage.json");
+    process.env.PRIZE_SCOUT_DATA_DIR = dir;
     process.env.PRIZE_SCOUT_FREE_DAILY_CAP = "10";
     const now = new Date("2026-11-09T18:00:00.000Z");
     expect(capDay(now, "America/Boise")).toBe("2026-11-09");
@@ -133,9 +136,16 @@ describe("free search cap", () => {
     expect(capped.reason).toBe("cap");
     const other = await beginSearch({ anonId: "browser-b", hasKey: true, now, query: "other" });
     expect(other.paused).toBe(false);
-    const repeat = await beginSearch({ anonId: "browser-b", hasKey: true, now, query: "other" });
+    await writeSearchCache("browser-b", "2026-11-08", "stale", { listings: [{ url: "https://example.com/stale" }], nextOffset: null });
+    expect(await readSearchCache("browser-b", capDay(now), "stale")).toBeNull();
+    const listings = [{ url: "https://example.com/other", title: "Other prize" }];
+    await writeSearchCache("browser-b", capDay(now), "Other", { listings, nextOffset: 20 });
+    const repeat = await beginSearch({ anonId: "browser-b", hasKey: true, now, query: "  other  " });
     expect(repeat.cached).toBe(true);
+    expect(repeat.listings).toEqual(listings);
+    expect(repeat.nextOffset).toBe(20);
     expect(repeat.summary.searchesToday).toBe(11);
+    expect(await readSearchCache("browser-a", capDay(now), "other")).toBeNull();
     expect(searchGate({ hasKey: false, startingCreditUsd: null, braveRequests: 0, costPerRequestUsd: 0.005, searchesByVisitor: 10, cap: 10 }).reason).toBe("cap");
     expect(CAP_LINE).toMatch(/free searches/);
     const snapshot = { salt: "s", startingCreditUsd: null, costPerRequestUsd: null, lowCreditUsd: null, lowAlertSent: false, allTimeSearches: 0, allTimeBraveRequests: 0, days: {}, served: { "2026-11-09": { hash: ["other"] } } };
