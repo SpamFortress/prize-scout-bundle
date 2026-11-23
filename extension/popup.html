@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Prize Scout</title>
+    <style>
+      body { font: 14px/1.4 system-ui, sans-serif; margin: 0; width: 320px; color: #202124; }
+      header, main { padding: 12px 14px; }
+      header { border-bottom: 1px solid #ebebeb; }
+      h1 { font-size: 16px; font-weight: 500; margin: 0; }
+      label { display: block; font-size: 12px; margin-top: 10px; }
+      input { width: 100%; box-sizing: border-box; margin-top: 4px; height: 32px; border: 1px solid #dadce0; border-radius: 6px; padding: 0 8px; }
+      button { margin-top: 12px; border: 0; border-radius: 999px; background: #1a73e8; color: white; padding: 8px 14px; font: inherit; cursor: pointer; }
+      button:disabled { background: #dadce0; color: #80868b; }
+      p { margin: 8px 0 0; }
+      .note { font-size: 13px; }
+      .checked { display: inline-block; margin-top: 8px; border: 1px solid #1a73e8; color: #174ea6; border-radius: 999px; padding: 2px 8px; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Prize Scout</h1>
+      <p id="version" class="note">Add-on v0.2.2</p>
+    </header>
+    <main>
+      <label>Pairing token
+        <input id="token" autocomplete="off" spellcheck="false" />
+      </label>
+      <label>Practice app
+        <input id="app" value="http://127.0.0.1:4342" />
+      </label>
+      <button id="check" type="button">Check this tab</button>
+      <p id="status" class="note" role="status"></p>
+    </main>
+    <script src="reader.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
