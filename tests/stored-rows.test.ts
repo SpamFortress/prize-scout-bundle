@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+const PRIVATE_FIXTURES = existsSync(new URL("./fixtures/retest/vance-ruger.html", import.meta.url));
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -15,8 +16,6 @@ function fixture(name: string): string {
 function page(title: string, body: string): string {
   return `<!doctype html><html><head><title>${title}</title></head><body>${body}</body></html>`;
 }
-
-const PRIVATE_FIXTURES = existsSync(new URL("./fixtures/retest/vance-ruger.html", import.meta.url));
 
 describe("stored rows keep the 83ae473 decision", () => {
   it("ignores repeated headings, nav, footer, cookies, duplicates, and a rules index", () => {

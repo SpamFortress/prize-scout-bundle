@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+const PRIVATE_FIXTURES = existsSync(new URL("./fixtures/retest/vance-ruger.html", import.meta.url));
 import { describe, expect, it } from "vitest";
 import { buildCalendar, foldIcsLine, type CalendarContest } from "@/domain/calendar-ics";
 import { prize1099Line, prize1099Threshold } from "@/config/prize-reporting";
@@ -6,7 +7,6 @@ import { entryTaxLine } from "@/domain/entry-tax";
 import { federalIncomeTaxCents } from "@/domain/federal-tax";
 import { fetchRank, searchVerifiedGiveaways } from "@/server/giveaway-search";
 
-const PRIVATE_FIXTURES = existsSync(new URL("./fixtures/retest/pe-12-days.html", import.meta.url));
 const NOW = new Date("2026-11-16T12:00:00.000Z");
 const FORM = `<form action="/enter"><input name="email"><button type="submit">Enter</button></form>`;
 

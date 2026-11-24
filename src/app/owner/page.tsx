@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { ownerTokenMatches } from "@/server/owner-gate";
 import { getUsageSummary, saveOwnerSettings } from "@/server/usage-store";
+import { ownerDonationView } from "@/server/donation-store";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,7 @@ export default async function OwnerPage({ searchParams }: { searchParams: Promis
   const token = params.token ?? "";
   if (!ownerTokenMatches(token)) notFound();
   const summary = await getUsageSummary();
+  const donations = await ownerDonationView();
 
   async function save(formData: FormData) {
     "use server";
@@ -54,6 +56,24 @@ export default async function OwnerPage({ searchParams }: { searchParams: Promis
         <dt>Searches left</dt>
         <dd className="text-right tabular-nums">{summary.searchesLeft ?? "Not set"}</dd>
       </dl>
+      <h2 className="mt-8 text-xl font-normal">Donations</h2>
+      <dl className="mt-4 grid grid-cols-2 gap-y-2 text-sm" data-owner-donations="yes">
+        <dt>Pool searches</dt>
+        <dd className="text-right tabular-nums">{donations.poolSearches}</dd>
+        <dt>Month spend</dt>
+        <dd className="text-right tabular-nums">{money(donations.monthSpendUsd)}</dd>
+      </dl>
+      <ul className="mt-4 space-y-2 text-sm">
+        {donations.donations.length === 0 ? <li>No donations yet.</li> : null}
+        {donations.donations.map((row) => (
+          <li key={`${row.at}-${row.amount}-${row.browserId ?? "pool"}`} className="flex justify-between gap-4">
+            <span>
+              {row.amount} {row.currency} · {row.at.slice(0, 10)}
+            </span>
+            <span>{row.matched ? "Matched" : "Pool"}</span>
+          </li>
+        ))}
+      </ul>
       <form action={save} className="mt-8 space-y-3 text-sm">
         <input type="hidden" name="token" value={token} />
         <label className="block">

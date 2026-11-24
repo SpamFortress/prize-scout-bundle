@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+const PRIVATE_FIXTURES = existsSync(new URL("./fixtures/retest/vance-ruger.html", import.meta.url));
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { JSDOM } from "jsdom";
@@ -17,6 +18,11 @@ const reader = require("../extension/reader.js") as {
 const NOW = new Date("2026-11-16T12:00:00.000Z");
 const EXTENSION = "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
+function load(name: string, url: string): JSDOM {
+  const html = readFileSync(new URL(`./fixtures/retest/${name}`, import.meta.url), "utf8");
+  return new JSDOM(html, { url });
+}
+
 function paintEntryForm(dom: JSDOM): void {
   const host = dom.window.document.createElement("div");
   const shadow = host.attachShadow({ mode: "open" });
@@ -31,23 +37,31 @@ function paintEntryForm(dom: JSDOM): void {
   dom.window.document.body.appendChild(frame);
 }
 
-const SYNTHETIC_PAGE = `<!doctype html><html><head><title>Example Giveaway</title></head><body><p>Enter the example drawing.</p><iframe src="https://widgets.example/frame"></iframe></body></html>`;
+const PAGES = [
+  ["jetblue-cruise.html", "https://www.jetbluevacations.com/cruises"],
+  ["carnival-bcsweeps.html", "https://www.carnival.com/Registration/Promotions/bcsweeps-2026"],
+  ["ramsey-cash.html", "https://www.ramseysolutions.com/cash"],
+  ["visitorlando-win-a-trip-live.html", "https://www.visitorlando.com/win-a-trip/"],
+  ["johnmalecki-milwaukee.html", "https://johnmalecki.com/pages/milwaukeegiveaway"],
+] as const;
 
 describe("rendered tab reader", () => {
-  it("inlines an open shadow form and reports an unreadable iframe", () => {
-    const dom = new JSDOM(SYNTHETIC_PAGE, { url: "https://example.com/giveaway" });
-    paintEntryForm(dom);
-    const read = reader.readRenderedDocument(dom.window.document);
-    expect(read.html).toContain('data-open-shadow="true"');
-    expect(read.html).toContain('type="email"');
-    expect(read.html).not.toContain("closed-secret");
-    expect(read.limits).toContain("cross-origin iframe skipped");
+  it.skipIf(!PRIVATE_FIXTURES)("inlines an open shadow form and reports an unreadable iframe", () => {
+    for (const [file, url] of PAGES) {
+      const dom = load(file, url);
+      paintEntryForm(dom);
+      const read = reader.readRenderedDocument(dom.window.document);
+      expect(read.html, file).toContain('data-open-shadow="true"');
+      expect(read.html, file).toContain('type="email"');
+      expect(read.html, file).not.toContain("closed-secret");
+      expect(read.limits, file).toContain("cross-origin iframe skipped");
+    }
   });
 
-  it.skip("does not verify Gun Talk from the widget alone (needs the private page capture)", () => {
-    const dom = new JSDOM(`<!doctype html><html><head><title>Range Day Giveaway</title></head><body><iframe src="https://sweepwidget.com/view/1"></iframe><a href="https://range.example/legal">Terms</a><p>Enter to win.</p></body></html>`, { url: "https://range.example/win" });
+  it.skipIf(!PRIVATE_FIXTURES)("does not verify Gun Talk from the widget alone", () => {
+    const dom = load("guntalk-november.html", "https://www.guntalk.com/win");
     const read = reader.readRenderedDocument(dom.window.document);
-    const result = classifyRenderedPage(read.html, "https://range.example/win", NOW, read.limits);
+    const result = classifyRenderedPage(read.html, "https://www.guntalk.com/win", NOW, read.limits);
     expect(result.listingGroup).not.toBe("verified");
     expect(result.openRulesUrl ?? "").not.toContain("/legal");
     expect(result.openRulesUrl ?? result.rulesNote).toMatch(/https:\/\/|widget|not in the page HTML|needs a stated end date|Open the rules page|Official rules not found|Rules are brief/i);
@@ -55,9 +69,9 @@ describe("rendered tab reader", () => {
 });
 
 describe("rendered page gates", () => {
-  it("keeps a contiguous-states rules page out of Verified and open to Idaho", () => {
-    const html = `<!doctype html><html><head><title>Harbor County Trip Rules</title></head><body><p>The Harbor County Family Trip is intended for participants in the forty-eight (48) contiguous United States and Washington D.C. only. Void in Alaska and Hawaii.</p><p>This sweepstakes is open only to legal United States residents residing in the forty-eight (48) contiguous United States or Washington, D.C. The sweepstakes ends on January 18, 2027. No purchase necessary. Sponsor: Harbor County Visitors.</p></body></html>`;
-    const row = classifyRenderedPage(html, "https://harbor.example/trip/rules", NOW);
+  it.skipIf(!PRIVATE_FIXTURES)("keeps the Visit Orlando rules page out of Verified and open to Idaho", () => {
+    const html = readFileSync(new URL("./fixtures/retest/visitorlando-sweepstakes-rules.html", import.meta.url), "utf8");
+    const row = classifyRenderedPage(html, "https://www.visitorlando.com/win-a-trip/sweepstakes-rules/", NOW);
     expect(row.checkedByYou).toBe(true);
     expect(row.listingGroup).toBe("check");
     expect(row.endIso).toBe("2027-01-18");
@@ -150,13 +164,13 @@ describe("checked rows survive a restart", () => {
     expect(rows[0]?.endIso).toBe("2027-01-18");
   });
 
-  it("re-applies the Idaho rule to a stored Visit Orlando check without fetching", async () => {
+  it.skipIf(!PRIVATE_FIXTURES)("re-applies the Idaho rule to a stored Visit Orlando check without fetching", async () => {
     const file = useTempFile();
-    const html = `<!doctype html><html><head><title>Harbor County Trip Rules</title></head><body><p>The Harbor County Family Trip is intended for participants in the forty-eight (48) contiguous United States and Washington D.C. only. Void in Alaska and Hawaii.</p><p>This sweepstakes is open only to legal United States residents residing in the forty-eight (48) contiguous United States or Washington, D.C. The sweepstakes ends on January 18, 2027. No purchase necessary. Sponsor: Harbor County Visitors.</p></body></html>`;
-    const url = "https://harbor.example/trip/rules";
+    const html = readFileSync(new URL("./fixtures/retest/visitorlando-sweepstakes-rules.html", import.meta.url), "utf8");
+    const url = "https://www.visitorlando.com/win-a-trip/sweepstakes-rules/";
     writeFileSync(file, JSON.stringify([{
       url,
-      title: "Harbor County Trip Rules",
+      title: "Sweepstakes Rules | Visit Orlando",
       checkedByYou: true,
       listingGroup: "check",
       rulesNote: "Not open in Idaho",
@@ -169,7 +183,7 @@ describe("checked rows survive a restart", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     try {
       const rows = await listAddonChecks();
-      const row = rows.find((item) => item.url.includes("harbor.example"));
+      const row = rows.find((item) => item.url.includes("sweepstakes-rules"));
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(row?.checkedByYou).toBe(true);
       expect(row?.listingGroup).toBe("check");

@@ -139,3 +139,83 @@ export function formatInZone(instant: Date, timeZone: string): string {
 export function isDailyClock(clock: EntryClock | null | undefined): boolean {
   return clock === "calendar_day" || clock === "rolling_24h";
 }
+
+export type ResetKind = "calendar" | "rolling" | "unknown";
+
+/** Only facts the rules text actually states. A missing zone or hour count is not filled in. */
+export interface ResetFact {
+  kind: ResetKind;
+  timeZone: string | null;
+  rollingHours: number | null;
+  /** 1 for a stated daily calendar reset, 7 for a stated weekly one. */
+  calendarDays: number | null;
+  quote: string | null;
+}
+
+const HOUR_COUNT = /(?:every|within|after|once per|per)\s+(\d{1,3})\s+hours?\b/i;
+const CALENDAR_WORD = /calendar day|once per day|once a day|\bper day\b|daily entry|enter daily|at midnight|\bmidnight\b/i;
+const WEEKLY_WORD = /once per week|once a week|\bper week\b|\bweekly\b/i;
+
+function firstSentence(text: string, pattern: RegExp): string | null {
+  const lines = text.split(/(?<=[.!?])\s+|\n+/);
+  const line = lines.find((item) => pattern.test(item));
+  if (!line) return null;
+  const clean = line.replace(/\s+/g, " ").trim();
+  return clean.length > 180 ? `${clean.slice(0, 177)}…` : clean;
+}
+
+/** Reads a reset only from words on the page. It does not pick Eastern Time or 24 hours when those words are absent. */
+export function resetFactFromText(text: string): ResetFact {
+  const zone = rulesTimeZone(text);
+  const namedZone = zone.assumed ? null : zone.iana;
+  const hoursMatch = text.match(/(\d{1,3}) hours/i);
+  const rollingHours = hoursMatch ? Number(hoursMatch[1]) : null;
+  const rollingStated = rollingHours !== null && rollingHours > 0 && rollingHours <= 168 && /enter|entry|entrant|limit|person|sweep/i.test(text);
+  const weekly = WEEKLY_WORD.test(text);
+  const calendarStated = CALENDAR_WORD.test(text) || weekly;
+  const calendarDays = weekly && !CALENDAR_WORD.test(text) ? 7 : calendarStated ? 1 : null;
+  const quotePattern = rollingStated ? new RegExp(HOUR_COUNT.source, "i") : calendarStated ? (weekly ? WEEKLY_WORD : CALENDAR_WORD) : /$^/;
+  const quote = firstSentence(text, quotePattern);
+  if (calendarStated && rollingStated) {
+    return { kind: "unknown", timeZone: namedZone, rollingHours, calendarDays, quote };
+  }
+  if (rollingStated) return { kind: "rolling", timeZone: null, rollingHours, calendarDays: null, quote };
+  if (calendarStated && namedZone) return { kind: "calendar", timeZone: namedZone, rollingHours: null, calendarDays, quote };
+  return { kind: "unknown", timeZone: namedZone, rollingHours: rollingStated ? rollingHours : null, calendarDays: null, quote };
+}
+
+export interface NextReset {
+  at: string | null;
+  needsChecking: boolean;
+  note: string;
+}
+
+/** Unknown uses the later of a stated midnight and a stated hour count. It does not invent either one. */
+export function nextResetAt(fact: ResetFact, enteredAt: Date | null): NextReset {
+  const missing = "Needs checking: the rules do not state whether the next entry is a calendar midnight or a number of hours after the last entry.";
+  if (!enteredAt) {
+    return { at: null, needsChecking: fact.kind === "unknown", note: fact.kind === "unknown" ? missing : "" };
+  }
+  const rolling = fact.rollingHours ? new Date(enteredAt.getTime() + fact.rollingHours * 60 * 60 * 1000) : null;
+  const calendar = fact.timeZone && fact.calendarDays
+    ? nextEligibleAt(fact.calendarDays === 7 ? "weekly" : "calendar_day", enteredAt, { iana: fact.timeZone, assumed: false })
+    : null;
+  if (fact.kind === "rolling" && rolling) return { at: rolling.toISOString(), needsChecking: false, note: "" };
+  if (fact.kind === "calendar" && calendar) return { at: calendar.at.toISOString(), needsChecking: false, note: "" };
+  if (rolling && calendar) {
+    const later = rolling.getTime() >= calendar.at.getTime() ? rolling : calendar.at;
+    return {
+      at: later.toISOString(),
+      needsChecking: true,
+      note: "Needs checking: the rules name both a calendar reset and an hour count, so the later time is shown.",
+    };
+  }
+  if (rolling || calendar) {
+    return {
+      at: (rolling ?? calendar!.at).toISOString(),
+      needsChecking: true,
+      note: missing,
+    };
+  }
+  return { at: null, needsChecking: true, note: missing };
+}

@@ -18,6 +18,8 @@ const eslintConfig = [
       "**/.next-vitest/**",
       "out/**",
       "build/**",
+      ".open-next/**",
+      ".wrangler/**",
       "next-env.d.ts",
     ],
   },

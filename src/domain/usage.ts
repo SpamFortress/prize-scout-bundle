@@ -5,6 +5,9 @@ export const PAUSE_LINE = "Search is paused right now";
 export const DEFAULT_COST_USD = 0.005;
 export const DEFAULT_LOW_CREDIT_USD = 2;
 export const DEFAULT_DAILY_CAP = 25;
+export const DEFAULT_FREE_DAILY_CAP = 10;
+export const DEFAULT_CAP_TIMEZONE = "America/Boise";
+export const CAP_LINE = "You've used today's free searches. They reset at midnight.";
 
 /** Dollars of search cost that one dollar of tips covers. */
 export function searchesPerDollar(costPerRequestUsd: number): number {
@@ -70,6 +73,8 @@ export interface UsageSnapshot {
   allTimeSearches: number;
   allTimeBraveRequests: number;
   days: Record<string, DayUsage>;
+  /** Queries already sent upstream, keyed by cap-day then visitor hash. Repeats are not counted. */
+  served?: Record<string, Record<string, string[]>>;
 }
 
 export function emptyUsage(salt: string): UsageSnapshot {
@@ -82,6 +87,38 @@ export function emptyUsage(salt: string): UsageSnapshot {
     allTimeSearches: 0,
     allTimeBraveRequests: 0,
     days: {},
+    served: {},
+  };
+}
+
+export function capTimeZone(): string {
+  return process.env.PRIZE_SCOUT_CAP_TIMEZONE?.trim() || DEFAULT_CAP_TIMEZONE;
+}
+
+/** Calendar date in the cap zone. The default zone is America/Boise. */
+export function capDay(now: Date, timeZone = capTimeZone()): string {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
+  const read = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${read("year")}-${read("month")}-${read("day")}`;
+}
+
+export function donationUrl(): string {
+  return process.env.PRIZE_SCOUT_DONATION_URL?.trim() ?? "";
+}
+
+export function alreadyServed(snapshot: UsageSnapshot, day: string, visitorHash: string, query: string): boolean {
+  const list = snapshot.served?.[day]?.[visitorHash] ?? [];
+  return list.includes(query.trim().toLowerCase());
+}
+
+export function rememberServed(snapshot: UsageSnapshot, day: string, visitorHash: string, query: string): UsageSnapshot {
+  const normalized = query.trim().toLowerCase();
+  const dayMap = snapshot.served?.[day] ?? {};
+  const list = dayMap[visitorHash] ?? [];
+  if (list.includes(normalized)) return snapshot;
+  return {
+    ...snapshot,
+    served: { ...snapshot.served, [day]: { ...dayMap, [visitorHash]: [...list, normalized] } },
   };
 }
 
@@ -95,7 +132,7 @@ export function visitorSearchesOn(snapshot: UsageSnapshot, day: string, visitorH
 
 export interface SearchGate {
   paused: boolean;
-  reason: "ok" | "no_key" | "credit" | "cap";
+  reason: "ok" | "no_key" | "credit" | "cap" | "global" | "cached";
 }
 
 export function searchGate(input: {
@@ -105,12 +142,19 @@ export function searchGate(input: {
   costPerRequestUsd: number;
   searchesByVisitor: number;
   cap: number;
+  globalToday?: number;
+  globalCap?: number | null;
+  cached?: boolean;
 }): SearchGate {
+  if (input.cached) return { paused: false, reason: "cached" };
+  if (input.globalCap !== null && input.globalCap !== undefined && dailyCapReached(input.globalToday ?? 0, input.globalCap)) {
+    return { paused: true, reason: "global" };
+  }
+  if (dailyCapReached(input.searchesByVisitor, input.cap)) return { paused: true, reason: "cap" };
   if (!input.hasKey) return { paused: true, reason: "no_key" };
   if (input.startingCreditUsd !== null && creditExhausted(remainingCreditUsd(input.startingCreditUsd, input.braveRequests, input.costPerRequestUsd))) {
     return { paused: true, reason: "credit" };
   }
-  if (dailyCapReached(input.searchesByVisitor, input.cap)) return { paused: true, reason: "cap" };
   return { paused: false, reason: "ok" };
 }
 

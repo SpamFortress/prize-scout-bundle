@@ -37,6 +37,7 @@ function calendarFromSample(item: EntrySample): CalendarContest {
 import { applyLiveFilters, LIVE_SOURCES, OPEN_LIVE_FILTERS, type LiveFilterState } from "@/domain/live-filters";
 import { bucketRows } from "@/config/results-view";
 import { PAUSE_LINE } from "@/domain/usage";
+import { DonationMeter } from "@/components/donation-meter";
 import { mailCardLayoutFixture } from "@/domain/rules-facts";
 import type { VerifiedPracticeRow } from "@/domain/verified-entry";
 import { MailInPrintCard } from "@/components/mail-card";
@@ -145,6 +146,9 @@ export function EntriesPreview({ onBack, scope, front = false }: { onBack?: () =
   const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [searchPaused, setSearchPaused] = useState(false);
+  const [pauseLine, setPauseLine] = useState(PAUSE_LINE);
+  const [donationHref, setDonationHref] = useState("");
+  const [meter, setMeter] = useState<{ coveredUsd: number; budgetUsd: number; bonus: number; claimCode: string; donationUrl: string | null } | null>(null);
   const [tip, setTip] = useState<{ url: string; searchesPerDollar: number } | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [addonChecks, setAddonChecks] = useState<Record<string, { checkedByYou?: boolean; listingGroup?: string; rulesNote?: string; addonVersion?: string; endIso?: string | null; openRulesUrl?: string | null }>>({});
@@ -162,7 +166,7 @@ export function EntriesPreview({ onBack, scope, front = false }: { onBack?: () =
   );
   const catalog = [...verifiedRows, ...samples];
   const visible = tab && scope && practice
-    ? filterPracticeRows(catalog, { scope, savedIds: practice.checked, query: tab.query, sources: tab.sources, method: tab.method, order: tab.order, region: tab.region })
+    ? filterPracticeRows(catalog, { scope, savedIds: practice.checked, query: tab.query, sources: tab.sources, method: tab.method, frequency: tab.frequency, order: tab.order, region: tab.region })
     : catalog.filter((item) => matchesEntryMethod(item, method) && (scope !== "entries" || item.tracked !== false));
   const pinnedRows = visible.filter((item) => pinned.includes(item.id));
   const otherRows = visible.filter((item) => !pinned.includes(item.id));
@@ -248,10 +252,12 @@ export function EntriesPreview({ onBack, scope, front = false }: { onBack?: () =
       cancelled = true;
     };
   }, [scope]);
-  async function collectSearch(queries: string[], offset: number): Promise<{ rows: EntrySample[]; paused: boolean; nextOffset: number | null }> {
+  async function collectSearch(queries: string[], offset: number): Promise<{ rows: EntrySample[]; paused: boolean; nextOffset: number | null; pauseLine: string; donationUrl: string }> {
     const next: EntrySample[] = [];
     let paused = false;
     let more: number | null = null;
+    let line = PAUSE_LINE;
+    let donation = "";
     for (const query of queries) {
       try {
         const response = await fetch("/api/search", {
@@ -259,9 +265,12 @@ export function EntriesPreview({ onBack, scope, front = false }: { onBack?: () =
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ query, offset }),
         });
-        const body = (await response.json()) as { listings?: VerifiedPracticeRow[]; paused?: boolean; nextOffset?: number | null };
-        if (body.paused) paused = true;
-        else {
+        const body = (await response.json()) as { listings?: VerifiedPracticeRow[]; paused?: boolean; nextOffset?: number | null; pauseLine?: string; donationUrl?: string | null };
+        if (body.paused) {
+          paused = true;
+          if (body.pauseLine) line = body.pauseLine;
+          if (body.donationUrl) donation = body.donationUrl;
+        } else {
           for (const listing of body.listings ?? []) next.push(sampleFromVerified(listing));
           if (typeof body.nextOffset === "number") more = body.nextOffset;
         }
@@ -269,7 +278,7 @@ export function EntriesPreview({ onBack, scope, front = false }: { onBack?: () =
         paused = true;
       }
     }
-    return { rows: next, paused, nextOffset: paused ? null : more };
+    return { rows: next, paused, nextOffset: paused ? null : more, pauseLine: line, donationUrl: donation };
   }
 
   useEffect(() => {
@@ -291,6 +300,27 @@ export function EntriesPreview({ onBack, scope, front = false }: { onBack?: () =
   useEffect(() => {
     if (scope !== "home") return;
     let cancelled = false;
+    fetch("/api/donations")
+      .then((response) => response.json())
+      .then((body: { ok?: boolean; coveredUsd?: number; budgetUsd?: number; bonus?: number; claimCode?: string; donationUrl?: string | null }) => {
+        if (cancelled || !body.ok) return;
+        setMeter({
+          coveredUsd: body.coveredUsd ?? 0,
+          budgetUsd: body.budgetUsd ?? 0,
+          bonus: body.bonus ?? 0,
+          claimCode: body.claimCode ?? "",
+          donationUrl: body.donationUrl ?? null,
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [scope, searchPaused]);
+
+  useEffect(() => {
+    if (scope !== "home") return;
+    let cancelled = false;
     const queries = liveQueryKey ? liveQueryKey.split("\n") : [];
     if (queries.length === 0) {
       setLiveRows([]);
@@ -302,6 +332,8 @@ export function EntriesPreview({ onBack, scope, front = false }: { onBack?: () =
       const collected = await collectSearch(queries, 0);
       if (cancelled) return;
       setSearchPaused(collected.paused);
+      setPauseLine(collected.pauseLine);
+      setDonationHref(collected.donationUrl);
       setNextOffset(collected.nextOffset);
       setLiveRows(collected.paused ? [] : collected.rows);
     })();
@@ -445,9 +477,18 @@ export function EntriesPreview({ onBack, scope, front = false }: { onBack?: () =
               {notice}
             </p>
           ) : null}
+          {meter ? <DonationMeter coveredUsd={meter.coveredUsd} budgetUsd={meter.budgetUsd} bonus={meter.bonus} claimCode={meter.claimCode} donationUrl={meter.donationUrl} /> : null}
           {searchPaused ? (
             <p className="mt-8 text-sm text-[#3c4043]" data-search-paused="yes">
-              {PAUSE_LINE}
+              {pauseLine}
+              {donationHref ? (
+                <>
+                  {" "}
+                  <a href={donationHref} data-donation-link="yes">
+                    Support the search budget
+                  </a>
+                </>
+              ) : null}
             </p>
           ) : null}
           {filteredLive.shown.length > 0 ? (
@@ -465,6 +506,8 @@ export function EntriesPreview({ onBack, scope, front = false }: { onBack?: () =
                 const collected = await collectSearch(queries, nextOffset);
                 setLoadingMore(false);
                 setSearchPaused(collected.paused);
+                setPauseLine(collected.pauseLine);
+                setDonationHref(collected.donationUrl);
                 setNextOffset(collected.nextOffset);
                 if (collected.paused) {
                   setLiveRows([]);
@@ -846,7 +889,7 @@ function PracticeToolbar({
   showQuery = true,
   queryPlaceholder = "I want to win…",
 }: {
-  tab: { query: string; sources: Source[]; method: MethodFilter; order: "newest" | "oldest" | "ending-soonest" | "ending-latest"; region: string };
+  tab: { query: string; sources: Source[]; method: MethodFilter; frequency?: "all" | "daily" | "weekly" | "once" | "unknown"; order: "newest" | "oldest" | "ending-soonest" | "ending-latest"; region: string };
   onChange: (patch: Partial<typeof tab>) => void;
   showQuery?: boolean;
   queryPlaceholder?: string;
@@ -897,6 +940,27 @@ function PracticeToolbar({
           <span className="mt-1 block text-xs leading-5 text-[#3c4043]">More regions in a later update.</span>
         </label>
       ) : null}
+      <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Entry frequency" data-frequency-filter="yes">
+        {(
+          [
+            ["all", "All"],
+            ["daily", "Daily"],
+            ["weekly", "Weekly"],
+            ["once", "One-time"],
+            ["unknown", "Unknown"],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            aria-pressed={(tab.frequency ?? "all") === value}
+            className={`h-8 rounded-full border px-3 text-sm ${(tab.frequency ?? "all") === value ? "border-[#202124] bg-[#f1f3f4] font-medium" : "border-[#dadce0] bg-white font-normal"}`}
+            onClick={() => onChange({ frequency: value })}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
         <div role="group" aria-label="Added time" className="flex items-center gap-1">
           <span>Added:</span>
